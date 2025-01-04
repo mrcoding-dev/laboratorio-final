@@ -137,21 +137,21 @@ jobs:
     name: Verificación de Controles de Seguridad
     needs: [sast, sca, image-security]
     runs-on: ubuntu-latest
-    if: always()
+    if: success() || failure()
     outputs:
       has_vulnerabilities: ${{ steps.security-check.outputs.has_vulnerabilities }}
     steps:
       - name: Verificar Resultados
         id: security-check
         run: |
-          if [[ "${{ needs.sast.result }}" != 'success' || \
-                "${{ needs.sca.result }}" != 'success' || \
-                "${{ needs.image-security.result }}" != 'success' ]]; then
+          if [[ "${{ needs.sast.result }}" == 'failure' || \
+                "${{ needs.sca.result }}" == 'failure' || \
+                "${{ needs.image-security.result }}" == 'failure' ]]; then
             echo "has_vulnerabilities=true" >> $GITHUB_OUTPUT
             echo "⚠️ Se encontraron vulnerabilidades en uno o más controles de seguridad:"
-            [[ "${{ needs.sast.result }}" != 'success' ]] && echo "❌ SAST falló"
-            [[ "${{ needs.sca.result }}" != 'success' ]] && echo "❌ SCA falló"
-            [[ "${{ needs.image-security.result }}" != 'success' ]] && echo "❌ Análisis de imagen falló"
+            [[ "${{ needs.sast.result }}" == 'failure' ]] && echo "❌ SAST falló"
+            [[ "${{ needs.sca.result }}" == 'failure' ]] && echo "❌ SCA falló"
+            [[ "${{ needs.image-security.result }}" == 'failure' ]] && echo "❌ Análisis de imagen falló"
           else
             echo "has_vulnerabilities=false" >> $GITHUB_OUTPUT
             echo "✅ Todos los controles de seguridad pasaron exitosamente"
@@ -162,7 +162,7 @@ jobs:
     name: Aprobación Manual a Producción
     needs: [verify-security, build-qa]
     runs-on: ubuntu-latest
-    if: needs.verify-security.outputs.has_vulnerabilities == 'true'
+    if: success() || failure() && needs.verify-security.result != 'skipped' && needs.verify-security.outputs.has_vulnerabilities == 'true'
     permissions:
       issues: write
     steps:
@@ -177,9 +177,9 @@ jobs:
             Se requiere aprobación manual para continuar con el despliegue.
             
             Se han detectado vulnerabilidades en los siguientes controles:
-            ${{ needs.sast.result != 'success' && '- ❌ SAST: Vulnerabilidades en el código' || '' }}
-            ${{ needs.sca.result != 'success' && '- ❌ SCA: Vulnerabilidades en dependencias' || '' }}
-            ${{ needs.image-security.result != 'success' && '- ❌ Imagen: Vulnerabilidades en la imagen Docker' || '' }}
+            ${{ needs.sast.result == 'failure' && '- ❌ SAST: Vulnerabilidades en el código' || '' }}
+            ${{ needs.sca.result == 'failure' && '- ❌ SCA: Vulnerabilidades en dependencias' || '' }}
+            ${{ needs.image-security.result == 'failure' && '- ❌ Imagen: Vulnerabilidades en la imagen Docker' || '' }}
             
             Por favor, revisa los reportes antes de aprobar el despliegue a producción.
             
@@ -206,7 +206,7 @@ jobs:
     name: Despliegue Automático a Producción
     needs: [verify-security, build-qa]
     runs-on: ubuntu-latest
-    if: needs.verify-security.outputs.has_vulnerabilities == 'false'
+    if: success() || failure() && needs.verify-security.result != 'skipped' && needs.verify-security.outputs.has_vulnerabilities == 'false'
     steps:
       - name: Iniciar Sesión en Docker Hub
         uses: docker/login-action@v3

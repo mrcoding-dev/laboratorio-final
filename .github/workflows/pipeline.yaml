@@ -140,33 +140,10 @@ jobs:
     if: always()
     outputs:
       has_vulnerabilities: ${{ steps.security-check.outputs.has_vulnerabilities }}
-      sast_failed: ${{ steps.security-check.outputs.sast_failed }}
-      sca_failed: ${{ steps.security-check.outputs.sca_failed }}
-      image_failed: ${{ steps.security-check.outputs.image_failed }}
     steps:
       - name: Verificar Resultados
         id: security-check
         run: |
-          # Verificar cada control
-          if [[ "${{ needs.sast.result }}" != 'success' ]]; then
-            echo "sast_failed=true" >> $GITHUB_OUTPUT
-          else
-            echo "sast_failed=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if [[ "${{ needs.sca.result }}" != 'success' ]]; then
-            echo "sca_failed=true" >> $GITHUB_OUTPUT
-          else
-            echo "sca_failed=false" >> $GITHUB_OUTPUT
-          fi
-          
-          if [[ "${{ needs.image-security.result }}" != 'success' ]]; then
-            echo "image_failed=true" >> $GITHUB_OUTPUT
-          else
-            echo "image_failed=false" >> $GITHUB_OUTPUT
-          fi
-          
-          # Verificar si alguno falló
           if [[ "${{ needs.sast.result }}" != 'success' || \
                 "${{ needs.sca.result }}" != 'success' || \
                 "${{ needs.image-security.result }}" != 'success' ]]; then
@@ -185,18 +162,10 @@ jobs:
     name: Aprobación Manual a Producción
     needs: [verify-security, build-qa]
     runs-on: ubuntu-latest
-    if: always() && needs.verify-security.outputs.has_vulnerabilities == 'true'
-    environment:
-      name: production-approval
-      url: ${{ steps.prod-url.outputs.url }}
+    if: needs.verify-security.outputs.has_vulnerabilities == 'true'
+    permissions:
+      issues: write
     steps:
-      - name: Mostrar Estado de Vulnerabilidades
-        run: |
-          echo "⚠️ Estado de los controles de seguridad:"
-          ${{ needs.verify-security.outputs.sast_failed == 'true' }} && echo "❌ SAST: Vulnerabilidades encontradas en el código"
-          ${{ needs.verify-security.outputs.sca_failed == 'true' }} && echo "❌ SCA: Vulnerabilidades encontradas en dependencias"
-          ${{ needs.verify-security.outputs.image_failed == 'true' }} && echo "❌ Imagen: Vulnerabilidades encontradas en la imagen Docker"
-
       - name: Solicitar Aprobación Manual
         uses: trstringer/manual-approval@v1
         with:
@@ -205,10 +174,12 @@ jobs:
           minimum-approvals: 1
           issue-title: "⚠️ Aprobar despliegue a producción con vulnerabilidades"
           issue-body: |
-            Se han detectado las siguientes vulnerabilidades:
-            ${{ needs.verify-security.outputs.sast_failed == 'true' && '❌ SAST: Vulnerabilidades en el código' || '' }}
-            ${{ needs.verify-security.outputs.sca_failed == 'true' && '❌ SCA: Vulnerabilidades en dependencias' || '' }}
-            ${{ needs.verify-security.outputs.image_failed == 'true' && '❌ Imagen: Vulnerabilidades en la imagen Docker' || '' }}
+            Se requiere aprobación manual para continuar con el despliegue.
+            
+            Se han detectado vulnerabilidades en los siguientes controles:
+            ${{ needs.sast.result != 'success' && '- ❌ SAST: Vulnerabilidades en el código' || '' }}
+            ${{ needs.sca.result != 'success' && '- ❌ SCA: Vulnerabilidades en dependencias' || '' }}
+            ${{ needs.image-security.result != 'success' && '- ❌ Imagen: Vulnerabilidades en la imagen Docker' || '' }}
             
             Por favor, revisa los reportes antes de aprobar el despliegue a producción.
             
@@ -216,31 +187,26 @@ jobs:
             Para denegar, comenta con: deny, denied, no
 
       - name: Iniciar Sesión en Docker Hub
+        if: success()
         uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKERHUB_USERNAME }}
           password: ${{ secrets.DOCKERHUB_TOKEN }}
 
       - name: Desplegar a Producción
+        if: success()
         run: |
+          echo "🚀 Desplegando a producción después de aprobación manual..."
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
           docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
-
-      - name: Configurar URL de Producción
-        id: prod-url
-        run: |
-          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final/tags" >> $GITHUB_OUTPUT
 
   # 7. Despliegue Automático (Si todo está OK)
   auto-deploy:
     name: Despliegue Automático a Producción
     needs: [verify-security, build-qa]
     runs-on: ubuntu-latest
-    if: always() && needs.verify-security.outputs.has_vulnerabilities == 'false'
-    environment:
-      name: production
-      url: ${{ steps.prod-url.outputs.url }}
+    if: needs.verify-security.outputs.has_vulnerabilities == 'false'
     steps:
       - name: Iniciar Sesión en Docker Hub
         uses: docker/login-action@v3
@@ -250,16 +216,7 @@ jobs:
 
       - name: Desplegar a Producción
         run: |
+          echo "✅ Todos los controles pasaron, desplegando automáticamente..."
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
           docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
-
-      - name: Configurar URL de Producción
-        id: prod-url
-        run: |
-          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final/tags" >> $GITHUB_OUTPUT
-
-      - name: Notificar Éxito
-        run: |
-          echo "✅ Todos los controles de seguridad pasaron"
-          echo "Imagen desplegada exitosamente en producción: ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest"

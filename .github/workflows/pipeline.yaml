@@ -1,0 +1,265 @@
+name: Pipeline DevSecOps
+
+on:
+  push:
+    branches:
+      - main
+      - feature/*
+  pull_request:
+    types: [opened, synchronize, reopened]
+  workflow_dispatch:
+
+jobs:
+  # 1. Construcción de Imagen
+  build-qa:
+    name: Construcción Imagen Docker
+    runs-on: ubuntu-latest
+    environment:
+      name: qa
+      url: ${{ steps.qa-url.outputs.url }}
+    steps:
+      - name: Clonar Repositorio
+        uses: actions/checkout@v4
+      
+      - name: Configurar Docker Buildx
+        uses: docker/setup-buildx-action@v3
+      
+      - name: Iniciar Sesión en Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+      
+      - name: Construir y Publicar Imagen QA
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
+          
+      - name: Configurar URL de QA
+        id: qa-url
+        run: |
+          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final/tags" >> $GITHUB_OUTPUT
+
+  # 2. SAST - Análisis estático con SonarCloud
+  sast:
+    name: Análisis Estático de Seguridad
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar Repositorio
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      
+      - name: Análisis con SonarCloud
+        uses: sonarsource/sonarcloud-github-action@v2.0.2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        with:
+          args: >
+            -Dsonar.organization=mrcoding-dev
+            -Dsonar.projectKey=mrcoding-dev_laboratorio-final
+            -Dsonar.sources=.
+
+      - name: Validar Vulnerabilidades
+        run: |
+          echo "Verificando vulnerabilidades críticas, altas y medias..."
+          response=$(curl -s -u "${{ secrets.SONAR_TOKEN}}:" \
+            "https://sonarcloud.io/api/issues/search?componentKeys=mrcoding-dev_laboratorio-final&types=VULNERABILITY&severities=CRITICAL,BLOCKER,MAJOR")
+          
+          vulnerabilities=$(echo $response | jq -r '.total')
+          
+          if [ "$vulnerabilities" -gt 0 ]; then
+            echo "❌ Se encontraron $vulnerabilities vulnerabilidades críticas/altas/medias:"
+            echo $response | jq -r '.issues[] | "- Severidad: \(.severity)\n  Archivo: \(.component)\n  Línea: \(.line)\n  Mensaje: \(.message)\n"'
+            echo "El proyecto no cumple con los estándares de seguridad."
+            exit 1
+          else
+            echo "✅ No se encontraron vulnerabilidades críticas, altas o medias."
+            echo "El proyecto cumple con los estándares de seguridad."
+          fi
+
+  # 3. SCA - Análisis de dependencias con OWASP
+  sca:
+    name: Análisis de Composición de Software
+    runs-on: ubuntu-latest
+    steps:
+      - name: Clonar Repositorio
+        uses: actions/checkout@v4
+      
+      - name: Configurar Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          
+      - name: Instalar Dependencias
+        run: |
+          npm install
+          cd functions && npm install
+          
+      - name: Análisis de Dependencias OWASP
+        uses: dependency-check/Dependency-Check_Action@main
+        with:
+          project: 'laboratorio-final'
+          path: '.'
+          format: 'HTML'
+          out: 'reports'
+          args: >
+            --failOnCVSS 4
+            --enableRetired
+
+      - name: Guardar Reporte de Dependencias
+        uses: actions/upload-artifact@v3
+        if: always()
+        with:
+          name: reporte-dependencias
+          path: reports/dependency-check-report.html
+
+  # 4. Análisis de Seguridad de Imagen
+  image-security:
+    name: Análisis de Seguridad de Imagen
+    needs: build-qa
+    runs-on: ubuntu-latest
+    steps:
+      - name: Análisis de Vulnerabilidades con Trivy
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}'
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: true
+          vuln-type: 'os,library'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+  # 5. Verificación de todos los controles
+  verify-security:
+    name: Verificación de Controles de Seguridad
+    needs: [sast, sca, image-security]
+    runs-on: ubuntu-latest
+    if: always()
+    outputs:
+      has_vulnerabilities: ${{ steps.security-check.outputs.has_vulnerabilities }}
+      sast_failed: ${{ steps.security-check.outputs.sast_failed }}
+      sca_failed: ${{ steps.security-check.outputs.sca_failed }}
+      image_failed: ${{ steps.security-check.outputs.image_failed }}
+    steps:
+      - name: Verificar Resultados
+        id: security-check
+        run: |
+          # Verificar cada control
+          if [[ "${{ needs.sast.result }}" != 'success' ]]; then
+            echo "sast_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "sast_failed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "${{ needs.sca.result }}" != 'success' ]]; then
+            echo "sca_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "sca_failed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          if [[ "${{ needs.image-security.result }}" != 'success' ]]; then
+            echo "image_failed=true" >> $GITHUB_OUTPUT
+          else
+            echo "image_failed=false" >> $GITHUB_OUTPUT
+          fi
+          
+          # Verificar si alguno falló
+          if [[ "${{ needs.sast.result }}" != 'success' || \
+                "${{ needs.sca.result }}" != 'success' || \
+                "${{ needs.image-security.result }}" != 'success' ]]; then
+            echo "has_vulnerabilities=true" >> $GITHUB_OUTPUT
+            echo "⚠️ Se encontraron vulnerabilidades en uno o más controles de seguridad:"
+            [[ "${{ needs.sast.result }}" != 'success' ]] && echo "❌ SAST falló"
+            [[ "${{ needs.sca.result }}" != 'success' ]] && echo "❌ SCA falló"
+            [[ "${{ needs.image-security.result }}" != 'success' ]] && echo "❌ Análisis de imagen falló"
+          else
+            echo "has_vulnerabilities=false" >> $GITHUB_OUTPUT
+            echo "✅ Todos los controles de seguridad pasaron exitosamente"
+          fi
+
+  # 6. Aprobación Manual (Si hay vulnerabilidades)
+  manual-approval:
+    name: Aprobación Manual a Producción
+    needs: [verify-security, build-qa]
+    runs-on: ubuntu-latest
+    if: always() && needs.verify-security.outputs.has_vulnerabilities == 'true'
+    environment:
+      name: production-approval
+      url: ${{ steps.prod-url.outputs.url }}
+    steps:
+      - name: Mostrar Estado de Vulnerabilidades
+        run: |
+          echo "⚠️ Estado de los controles de seguridad:"
+          ${{ needs.verify-security.outputs.sast_failed == 'true' }} && echo "❌ SAST: Vulnerabilidades encontradas en el código"
+          ${{ needs.verify-security.outputs.sca_failed == 'true' }} && echo "❌ SCA: Vulnerabilidades encontradas en dependencias"
+          ${{ needs.verify-security.outputs.image_failed == 'true' }} && echo "❌ Imagen: Vulnerabilidades encontradas en la imagen Docker"
+
+      - name: Solicitar Aprobación Manual
+        uses: trstringer/manual-approval@v1
+        with:
+          secret: ${{ secrets.GITHUB_TOKEN }}
+          approvers: ${{ github.actor }}
+          minimum-approvals: 1
+          issue-title: "⚠️ Aprobar despliegue a producción con vulnerabilidades"
+          issue-body: |
+            Se han detectado las siguientes vulnerabilidades:
+            ${{ needs.verify-security.outputs.sast_failed == 'true' && '❌ SAST: Vulnerabilidades en el código' || '' }}
+            ${{ needs.verify-security.outputs.sca_failed == 'true' && '❌ SCA: Vulnerabilidades en dependencias' || '' }}
+            ${{ needs.verify-security.outputs.image_failed == 'true' && '❌ Imagen: Vulnerabilidades en la imagen Docker' || '' }}
+            
+            Por favor, revisa los reportes antes de aprobar el despliegue a producción.
+            
+            Para aprobar, comenta con una de las siguientes palabras: approve, approved, lgtm, yes
+            Para denegar, comenta con: deny, denied, no
+
+      - name: Iniciar Sesión en Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Desplegar a Producción
+        run: |
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+
+      - name: Configurar URL de Producción
+        id: prod-url
+        run: |
+          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final/tags" >> $GITHUB_OUTPUT
+
+  # 7. Despliegue Automático (Si todo está OK)
+  auto-deploy:
+    name: Despliegue Automático a Producción
+    needs: [verify-security, build-qa]
+    runs-on: ubuntu-latest
+    if: always() && needs.verify-security.outputs.has_vulnerabilities == 'false'
+    environment:
+      name: production
+      url: ${{ steps.prod-url.outputs.url }}
+    steps:
+      - name: Iniciar Sesión en Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Desplegar a Producción
+        run: |
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+
+      - name: Configurar URL de Producción
+        id: prod-url
+        run: |
+          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final/tags" >> $GITHUB_OUTPUT
+
+      - name: Notificar Éxito
+        run: |
+          echo "✅ Todos los controles de seguridad pasaron"
+          echo "Imagen desplegada exitosamente en producción: ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest"

@@ -34,12 +34,12 @@ jobs:
         uses: docker/build-push-action@v5
         with:
           push: true
-          tags: ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
+          tags: ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:qa-${{ github.sha }}
           
       - name: Configurar URL de QA
         id: qa-url
         run: |
-          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final/tags" >> $GITHUB_OUTPUT
+          echo "url=https://hub.docker.com/r/${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}/tags" >> $GITHUB_OUTPUT
 
   # 2. SAST - Análisis estático con SonarCloud
   sast:
@@ -58,8 +58,8 @@ jobs:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
         with:
           args: >
-            -Dsonar.organization=mrcoding-dev
-            -Dsonar.projectKey=mrcoding-dev_laboratorio-final
+            -Dsonar.organization=${{ secrets.SONAR_ORGANIZATION}}
+            -Dsonar.projectKey=${{ secrets.SONAR_REP}}
             -Dsonar.sources=.
 
       - name: Validar Vulnerabilidades
@@ -101,7 +101,7 @@ jobs:
       - name: Análisis de Dependencias OWASP
         uses: dependency-check/Dependency-Check_Action@main
         with:
-          project: 'laboratorio-final'
+          project: '${{ secrets.SREP }}'
           path: '.'
           format: 'HTML'
           out: 'reports'
@@ -125,7 +125,7 @@ jobs:
       - name: Análisis de Vulnerabilidades con Trivy
         uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}'
+          image-ref: '${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:qa-${{ github.sha }}'
           format: 'table'
           exit-code: '1'
           ignore-unfixed: true
@@ -197,9 +197,9 @@ jobs:
         if: success()
         run: |
           echo "🚀 Desplegando a producción después de aprobación manual..."
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
-          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:qa-${{ github.sha }}
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_USERNAME }}:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:latest
 
   # 7. Despliegue Automático (Si todo está OK)
   auto-deploy:
@@ -217,6 +217,6 @@ jobs:
       - name: Desplegar a Producción
         run: |
           echo "✅ Todos los controles pasaron, desplegando automáticamente..."
-          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
-          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
-          docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:qa-${{ github.sha }}
+          docker tag ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKERHUB_USERNAME }}:latest
+          docker push ${{ secrets.DOCKERHUB_USERNAME }}/${{ secrets.DOCKER_REP }}:latest

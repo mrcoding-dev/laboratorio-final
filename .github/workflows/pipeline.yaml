@@ -229,9 +229,10 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Ejecutar Imagen
+        shell: pwsh
         run: |
-          echo "🚀 Ejecutando la imagen en runner local..."
+          echo "Ejecutando la imagen en runner local"
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
-          docker stop laboratorio-final || true
-          docker rm laboratorio-final || true
+          docker stop laboratorio-final; if ($LASTEXITCODE -ne 0) { echo "Container not running" }
+          docker rm laboratorio-final; if ($LASTEXITCODE -ne 0) { echo "Container not exists" }
           docker run -d --name laboratorio-final -p 3000:3000 ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest

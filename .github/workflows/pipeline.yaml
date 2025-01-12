@@ -220,3 +220,18 @@ jobs:
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }}
           docker tag ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:qa-${{ github.sha }} ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
           docker push ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+
+  # 8. Ejecutar en Runner Local
+  run-on-local:
+    name: Ejecutar en Runner Local
+    needs: [auto-deploy, manual-approval]
+    if: always() && (needs.auto-deploy.result == 'success' || needs.manual-approval.result == 'success')
+    runs-on: self-hosted
+    steps:
+      - name: Ejecutar Imagen
+        run: |
+          echo "🚀 Ejecutando la imagen en runner local..."
+          docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
+          docker stop laboratorio-final || true
+          docker rm laboratorio-final || true
+          docker run -d --name laboratorio-final -p 3000:3000 ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest

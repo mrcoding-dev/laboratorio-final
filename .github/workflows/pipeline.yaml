@@ -229,7 +229,7 @@ jobs:
     runs-on: self-hosted
     steps:
       - name: Ejecutar Imagen
-        shell: pwsh
+        shell: powershell
         run: |
           echo "Ejecutando la imagen en runner local"
           docker pull ${{ secrets.DOCKERHUB_USERNAME }}/laboratorio-final:latest
